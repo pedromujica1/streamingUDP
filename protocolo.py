@@ -5,7 +5,7 @@ HEADER_FMT = '!BIQHHH' #big-endian
 HEADER_SIZE = struct.calcsize(HEADER_FMT)  #tamanho do header: 19 bytes
 MAX_PAYLOAD = 1400
 
-JOIN, LEAVE, DATA, KEEPALIVE = 0, 1, 2, 3
+JOIN, EXIT, DATA, KEEPALIVE = 0, 1, 2, 3
 
 #instante atual em microssegundos, usado no campo timestamp
 def agora_us() -> int:

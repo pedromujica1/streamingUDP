@@ -58,6 +58,7 @@ udp_client_socket.close()
 ## Servidor de Streaming de Video com OpenCV
 
 [Tutorial Medium: Criando um servidor de Streming de video usando OpenCV](https://medium.com/@prasadparit006/python-project-building-a-simple-video-streaming-server-using-opencv-c8a9d9ba86d2)
+[Outro tutorial Medium](https://medium.com/@anshulsjr6/building-a-basic-video-streaming-application-in-python-with-opencv-cfb6995e2479)
 
 ### Server.py
 ```python
