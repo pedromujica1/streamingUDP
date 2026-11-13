@@ -5,6 +5,62 @@ import struct
 import argparse
 import os
 from fractions import Fraction
+from protocol import criar_pacote, ler_pacote
+
+def iniciar_conexao(host: str,port: int, path: str, interval: float, frag_size: int, quality: int, loop: bool):
+    
+    #abrindo o arquivo
+    cap = cv2.VideoCapture(path)
+    
+    #checar se o video abriu corretamente
+    if not cap.isOpened():
+        raise ValueError("Erro: Não foi possível abrir o vídeo.")
+    else:
+        print("Arquivo de víde aberto com sucesso!")
+        
+    #iniciando servidor socket
+    udp_server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server_addr = (host,port)
+    udp_server_socket.bind(server_addr)
+    
+    #aceitando conexao do cliente
+    client_socket, client_address = udp_server_socket.accept()
+    print(f"Connection from {client_address} accepted")
+    
+    
+
+    
+    while loop:
+        
+        #pega retorno e frames
+        ret, frame = cap.read()
+        
+        #pega frame serializado
+        frame_serializado = pickle.dumps(frame)
+        
+        #garante 4 bytes big endian
+        message_size = struct.pack("!L", len(frame_serializado))
+        
+        #envia ao cliente
+        client_socket.sendall(message_size + frame_serializado)
+        
+        #se nao tiver mais retorno, termina
+        if not ret:
+            break
+        
+        cv2.imshow("Top Video",frame)
+        
+        #se pressiona a tecla q, destroi janela
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+        
+    cap.release()
+    cv2.destroyAllWindows()
+        
+        
+    
+    
+    
 
 def testar_video(host: str,port: int, path: str, interval: float, frag_size: int, quality: int, loop: bool):
     #abrindo o arquivo
