@@ -7,9 +7,28 @@ import cv2
 import numpy as np
 from protocolo import JOIN, EXIT, DATA, KEEPALIVE, criar_pacote, ler_pacote, agora_us
 
-def thread_keepalive(sock, server_addr, running_event):
-    # Envia KEEPALIVE a cada 2 segundos enquanto running_event estiver ativo
-    pass
+def thread_keepalive(sock: socket.socket, servidor_addr: tuple, ativo: threading.Event, intervalo: float = 2.0):
+    while ativo.is_set():
+        # Aguarda o intervalo de envio ou acorda imediatamente caso ativo seja desmarcado
+        if ativo.wait(timeout=intervalo):
+            # Se ativo.wait retornou True antes do timeout, significa que ativo foi sinalizado para parar
+            break
+        
+        if not ativo.is_set():
+            break
+
+        try:
+            pacote = criar_pacote(
+                tipo=KEEPALIVE,
+                frame_id=0,
+                timestamp=agora_us(),
+                total_frags=0,
+                frag_index=0
+            )
+            sock.sendto(pacote, servidor_addr)
+        except OSError:
+            # Ocorre caso o socket tenha sido fechado pela thread principal durante o encerramento
+            break
 
 def thread_recepcao(sock, fila_frames, running_event):
     # Recebe pacotes, remonta no dicionário e joga na fila
