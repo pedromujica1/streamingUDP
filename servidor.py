@@ -1,3 +1,12 @@
+"""
+Servidor de Streaming de Imagens via UDP
+Requisitos e Bibliotecas:
+- Python 3.8+
+- opencv-python (cv2): Leitura do arquivo de video e compressao JPEG dos frames
+Instalacao:
+    pip install opencv-python
+"""
+
 import cv2
 import socket
 import time
@@ -98,51 +107,71 @@ def iniciar_servidor(host: str, port: int, path: str, interval: float, frag_size
     #
     try:
         while True:
-            # pega retorno e frames
-            ret, frame = cap.read()
-            
-            # se acabou o vídeo: se loop=true, volta pro início; senão, sai do while
-            if not ret:
-                if loop:
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    continue
-                break
-            
-            # pega timestamp
-            ts = agora_us()
-            
+            # 1. Gerenciamento e expiração de clientes inativos
             with clientes_lock:
                 tempo_agora = time.monotonic()
-                
-                # percorre lista de clientes
                 for client_addr, ultimo_contato in list(clientes.items()):
                     tempo_inativo = tempo_agora - ultimo_contato
                     if tempo_inativo > TIMEOUT_CLIENTE:
                         clientes.pop(client_addr, None)
                         print(f"[-] Cliente removido por inatividade: {client_addr}")
-                            
-                # copia clientes restantes ainda no lock
-                clientes_ativos = list(clientes.keys()) 
-                
-            # sem outros clientes assistindo, vai para o prox. frame
+
+                clientes_ativos = list(clientes.keys())
+
+            # 2. Se nao ha clientes, mantem o video pausado no inicio aguardando conexoes
             if not clientes_ativos:
-                time.sleep(interval)
-                continue   
-        
-            # pega frame serializado
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                frame_id = 0
+                time.sleep(0.1)
+                continue
+
+            # Marca tempo de inicio para compensar o ritmo de envio (FPS preciso)
+            t_inicio_frame = time.monotonic()
+
+            # 3. Leitura do frame somente quando ha clientes conectados
+            ret, frame = cap.read()
+
+            # Se acabou o video
+            if not ret:
+                if loop:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    continue
+                else:
+                    # Notifica os clientes atuais sobre o fim da transmissao
+                    pacote_fim = criar_pacote(
+                        tipo=EXIT,
+                        frame_id=0,
+                        timestamp=agora_us(),
+                        total_frags=0,
+                        frag_index=0
+                    )
+                    for cliente_addr in clientes_ativos:
+                        try:
+                            udp_server_socket.sendto(pacote_fim, cliente_addr)
+                        except OSError:
+                            pass
+                    print(f"[*] Fim do video atingido. Notificacao de encerramento enviada para {len(clientes_ativos)} cliente(s).")
+                    
+                    # Limpa a lista de clientes e reinicia o video, mantendo o servidor ativo
+                    with clientes_lock:
+                        clientes.clear()
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    frame_id = 0
+                    print("[*] Servidor pronto e aguardando novas conexoes...")
+                    time.sleep(0.5)
+                    continue
+
+            ts = agora_us()
+
+            # Codificacao JPEG
             capturado, frame_serializado = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
-            
-            # verifica se frame foi capturado
             if not capturado:
                 continue
-            
-            # transforma em bytes
+
             bytes_jpg = frame_serializado.tobytes()
-            # fragmentos fatiados de acordo os pedacos
             fragmentos = [bytes_jpg[i : i + frag_size] for i in range(0, len(bytes_jpg), frag_size)]
-            
+
             for index in range(len(fragmentos)):
-                # cria pacotes
                 pacote = criar_pacote(
                     tipo=DATA,
                     frame_id=frame_id,
@@ -151,16 +180,19 @@ def iniciar_servidor(host: str, port: int, path: str, interval: float, frag_size
                     frag_index=index,
                     payload=fragmentos[index]
                 )
-                
-                # enviando de acordo com ordem estabelecida em clientes_ativos
+
                 for cliente_addr in clientes_ativos:
                     try:
                         udp_server_socket.sendto(pacote, cliente_addr)
                     except OSError:
                         pass
-            
+
             frame_id += 1
-            time.sleep(interval)
+
+            # Ritmo preciso: desconta o tempo gasto de compressao e transmissao
+            tempo_processamento = time.monotonic() - t_inicio_frame
+            tempo_espera = max(0.0, interval - tempo_processamento)
+            time.sleep(tempo_espera)
 
     except KeyboardInterrupt:
         print("\nEncerrando servidor...")

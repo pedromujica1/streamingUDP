@@ -1,3 +1,13 @@
+"""
+Cliente de Streaming de Imagens via UDP
+Requisitos e Bibliotecas:
+- Python 3.8+
+- opencv-python (cv2): Manipulacao e decodificacao de imagens / exibicao em janela
+- numpy: Conversao de buffers de bytes para matrizes de imagem
+Instalacao:
+    pip install opencv-python numpy
+"""
+
 import socket
 import threading
 import queue
@@ -30,9 +40,64 @@ def thread_keepalive(sock: socket.socket, servidor_addr: tuple, ativo: threading
             # Ocorre caso o socket tenha sido fechado pela thread principal durante o encerramento
             break
 
-def thread_recepcao(sock, fila_frames, running_event):
-    # Recebe pacotes, remonta no dicionário e joga na fila
-    pass
+def thread_recepcao(sock: socket.socket, fila_frames: queue.Queue, ativo: threading.Event):
+    sock.settimeout(0.5)
+    buffer_montagem = {}
+    ultimo_frame_id = -1
+
+    while ativo.is_set():
+        try:
+            dados, _ = sock.recvfrom(2048)
+            pacote = ler_pacote(dados)
+        except (socket.timeout, ValueError):
+            continue
+        except OSError:
+            break
+
+        if pacote["tipo"] == EXIT:
+            print("\n[*] Servidor encerrou a transmissao.")
+            ativo.clear()
+            break
+
+        if pacote["tipo"] != DATA:
+            continue
+
+        f_id = pacote["frame_id"]
+        idx = pacote["frag_index"]
+        total = pacote["total_frags"]
+        payload = pacote["payload"]
+
+        # 1. Descarta fragmentos de frames que ja foram ultrapassados (prioridade tempo real)
+        if f_id <= ultimo_frame_id:
+            continue
+
+        # 2. Inicializa o buffer do frame se for o primeiro fragmento a chegar
+        if f_id not in buffer_montagem:
+            buffer_montagem[f_id] = {"total": total, "frags": {}}
+
+        buffer_montagem[f_id]["frags"][idx] = payload
+
+        # 3. Verifica se todos os fragmentos do frame foram recebidos
+        if len(buffer_montagem[f_id]["frags"]) == total:
+            try:
+                frame_bytes = b"".join(buffer_montagem[f_id]["frags"][i] for i in range(total))
+                
+                # Se a fila de exibicao estiver cheia, descarta o mais antigo para priorizar tempo real
+                if fila_frames.full():
+                    try:
+                        fila_frames.get_nowait()
+                    except queue.Empty:
+                        pass
+                
+                fila_frames.put_nowait(frame_bytes)
+                ultimo_frame_id = f_id
+            except KeyError:
+                pass
+
+            # 4. Limpeza: remove este frame e quaisquer frames anteriores que ficaram incompletos
+            chaves_antigas = [k for k in buffer_montagem.keys() if k <= f_id]
+            for k in chaves_antigas:
+                del buffer_montagem[k]
 
 def iniciar_cliente(host: str, port: int):
     servidor_addr = (host, port)
@@ -129,64 +194,6 @@ if __name__ == "__main__":
     args = definir_params()
     iniciar_cliente(args.host, args.port)
 
-
-
-#TRECHOS uteis
-#vai precisar usar isso
-# cv2.imshow("Top Video",frame)
-'''
-
-#se pressiona a tecla q, destroi janela
-    if 0xFF == ord('q'):
-        break
-'''
-
-'''
-Seguindo a arquitetura definida nas Seções 4, 5 e 6 do seu documento de projeto, a lógica do `cliente.py` se divide em quatro etapas diretas:
-
-1. **Inicialização e Conexão (`JOIN`)**
-* Lê os argumentos via `argparse`: endereço IP e porta do servidor, além do timeout para descartar frames incompletos.
-
-
-* Abre um socket UDP (`SOCK_DGRAM`), aumenta o buffer de recepção (`SO_RCVBUF`) para evitar perdas em rajadas e envia um pacote `JOIN` (com os demais campos zerados) para o servidor.
-
-
-* Inicia duas threads secundárias (`daemon=True`) e uma `Queue` compartilhada.
-
-
-
-
-2. **Thread de Keep-Alive**
-* Roda em loop dormindo um intervalo fixo (ex: a cada 2 ou 3 segundos, bem menor que os 7s de timeout do seu servidor) e envia um pacote `KEEPALIVE` para manter o cadastro ativo no servidor.
-
-
-
-
-3. **Thread de Recepção e Remontagem**
-* Fica em `recvfrom()` lendo os datagramas com `ler_pacote()` e gerenciando um dicionário de remontagem indexado por `frame_id`:
-
-
-* **Descarte de atrasados:** Ignora qualquer pacote cujo `frame_id` seja menor ou igual ao do último frame já exibido.
-
-
-* **Armazenamento:** Salva o payload na posição `frag_idx` (ignorando duplicatas) e registra o instante de chegada do primeiro pedaço daquele frame.
-
-
-* **Frame completo:** Quando a quantidade de pedaços atingir `total_frags`, junta os bytes na ordem (`0` até `total_frags - 1`), coloca o frame pronto e seu `timestamp` na `Queue` de exibição, e apaga do dicionário todos os frames incompletos mais antigos (`frame_id` menor).
-
-
-* **Limpeza por timeout:** Remove frames incompletos que ultrapassaram o tempo limite configurado ou o limite máximo de frames simultâneos no buffer (ex: 5).
-
-
-
-
-
-
-4. **Thread Principal: Exibição e Encerramento (`EXIT`)**
-* Pega os bytes JPEG prontos da `Queue`, converte em matriz com `np.frombuffer` + `cv2.imdecode`, calcula a latência (`agora_us() - timestamp`) para as métricas e atualiza a janela com `cv2.imshow`. (Se nenhum frame novo chegar, mantém o último frame exibido sem piscar tela preta).
-
-
-* Ao pressionar `'q'` ou fechar com `Ctrl+C`, envia um pacote `EXIT` ao servidor, fecha a janela e encerra o socket.'''
 
 
 
